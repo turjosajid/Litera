@@ -81,3 +81,13 @@ class PaperAnalysis(BaseModel):
         ..., 
         description="Documented limitations, failure cases, or areas for future research"
     )
+
+class PaperChunk(BaseModel):
+    """Represents a discrete semantic chunk of a paper with spatial metadata."""
+    chunk_id: str = Field(
+        ..., 
+        description="Unique ID"
+    )
+    paper_id: str = Field(..., description="The ArXiv paper ID")
+    page_number: int = Field(..., description="1-indexed page number where this chunk lives")
+    text: str = Field(..., description="The actual text content of this chunk")

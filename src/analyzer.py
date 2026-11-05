@@ -9,8 +9,9 @@ class PaperAnalyzer:
     Orchestrates paper summarization and technical analysis using a local Ollama model.
     """
 
-    def __init__(self, model_name: str = "qwen3:8b"):  
+    def __init__(self, model_name: str = "qwen3:8b", num_ctx: int = 16384):  
         self.model_name = model_name
+        self.num_ctx = num_ctx
 
     def _prepare_context(self, parsed_paper: ParsedPaper, max_pages: int = 12) -> str:
         """
@@ -73,7 +74,7 @@ Document Content:
                 format=PaperAnalysis.model_json_schema(),
                 options={
                     "temperature": 0.2,
-                    "num_ctx": 16384  # Crucial: prevents Ollama from silently truncating past 2048/4096 tokens
+                    "num_ctx": self.num_ctx  # Crucial: prevents Ollama from silently truncating past 2048/4096 tokens
                 }
             )
 

@@ -13,6 +13,7 @@ __pycache__/
 # Data and Cache directories 
 data/papers/*
 !data/papers/.gitkeep
+data/chromadb/
 
 # IDE and Editor settings
 .vscode/
