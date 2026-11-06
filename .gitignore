@@ -14,6 +14,7 @@ __pycache__/
 data/papers/*
 !data/papers/.gitkeep
 data/chromadb/
+data/library.db
 
 # IDE and Editor settings
 .vscode/
