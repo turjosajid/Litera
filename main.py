@@ -1,4 +1,5 @@
 import sys
+from typing import Dict, Optional
 from src.search import ArxivSearchEngine
 from src.downloader import PDFDownloader
 from src.parser import PDFParser
@@ -6,10 +7,15 @@ from src.analyzer import PaperAnalyzer
 from src.chunker import TextChunker
 from src.vector_store import VectorStoreManager
 from src.qa_engine import GroundedQAEngine
-from src.models import PaperAnalysis
+from src.comparator import PaperComparator
+from src.models import PaperMetadata, PaperAnalysis, PaperComparison
 
 
-def display_paper_card(index: int, paper):
+# In-memory session cache so we never re-analyze the same paper twice in one session
+ANALYSIS_CACHE: Dict[str, PaperAnalysis] = {}
+
+
+def display_paper_card(index: int, paper: PaperMetadata):
     """Prints paper summary card in search results."""
     print(f"\n[{index}] {paper.title}")
     print(f"    ID:        {paper.paper_id}")
@@ -36,6 +42,57 @@ def display_analysis_dossier(analysis: PaperAnalysis):
     for lim in analysis.limitations:
         print(f"   • {lim}")
     print("=" * 75)
+
+
+def display_comparison_dossier(comparison: PaperComparison):
+    """Prints the side-by-side comparison matrix and verdict."""
+    print("\n" + "=" * 75)
+    print(" ⚖️ SIDE-BY-SIDE RESEARCH PAPER COMPARISON")
+    print(f" Paper A: {comparison.paper_a_title}")
+    print(f" Paper B: {comparison.paper_b_title}")
+    print("=" * 75)
+
+    print("\n📌 EXECUTIVE SUMMARY OF DIVERGENCE:")
+    print(f"   {comparison.summary_of_differences}")
+
+    print("\n📊 COMPARISON MATRIX:")
+    for idx, point in enumerate(comparison.comparison_matrix, start=1):
+        print(f"\n   [{idx}] Dimension: {point.aspect.upper()}")
+        print(f"       • Paper A: {point.paper_a_take}")
+        print(f"       • Paper B: {point.paper_b_take}")
+        print(f"       ⚖️  Tradeoff / Winner: {point.winner_or_tradeoff}")
+
+    print("\n" + "-" * 75)
+    print("🏆 FINAL VERDICT & RECOMMENDATION:")
+    print(f"   {comparison.verdict_and_recommendation}")
+    print("=" * 75 + "\n")
+
+
+def get_paper_analysis(
+    paper: PaperMetadata,
+    downloader: PDFDownloader,
+    parser: PDFParser,
+    analyzer: PaperAnalyzer
+) -> Optional[PaperAnalysis]:
+    """Helper to fetch, parse, and analyze a paper with session caching."""
+    if paper.paper_id in ANALYSIS_CACHE:
+        print(f"[Session Cache Hit] Reusing existing analysis for: {paper.title}")
+        return ANALYSIS_CACHE[paper.paper_id]
+
+    print(f"\n[Processing] '{paper.title}'...")
+    pdf_path = downloader.download_paper(paper_id=paper.paper_id, pdf_url=paper.pdf_url)
+    if not pdf_path:
+        return None
+
+    parsed_paper = parser.parse_pdf(pdf_path, paper_id=paper.paper_id)
+    if not parsed_paper or parsed_paper.total_pages == 0:
+        return None
+
+    analysis = analyzer.analyze_paper(parsed_paper)
+    if analysis:
+        ANALYSIS_CACHE[paper.paper_id] = analysis
+
+    return analysis
 
 
 def run_qa_session(qa_engine: GroundedQAEngine, paper_id: str, paper_title: str):
@@ -78,12 +135,13 @@ def main():
     downloader = PDFDownloader()
     parser = PDFParser()
     analyzer = PaperAnalyzer(model_name="qwen3:8b", num_ctx=16384)
+    comparator = PaperComparator(model_name="qwen3:8b")
     chunker = TextChunker()
     vector_store = VectorStoreManager(embedding_model="nomic-embed-text")
     qa_engine = GroundedQAEngine(vector_store=vector_store, model_name="qwen3:8b")
 
     print("=" * 75)
-    print(" Research Paper Intelligence - Full RAG & Analysis System")
+    print(" Research Paper Intelligence - Full RAG, Analysis & Comparison")
     print("=" * 75)
 
     while True:
@@ -94,7 +152,7 @@ def main():
                 break
 
             print(f"\nSearching ArXiv for: '{query}'...")
-            papers = search_engine.search(query=query, max_results=3)
+            papers = search_engine.search(query=query, max_results=4)
 
             if not papers:
                 print("No papers found. Try different keywords.")
@@ -103,39 +161,67 @@ def main():
             for idx, p in enumerate(papers, start=1):
                 display_paper_card(idx, p)
 
-            choice = input("\nEnter paper number to explore (or Enter to search again): ").strip()
-            if not choice.isdigit() or not (1 <= int(choice) <= len(papers)):
+            user_choice = input(
+                "\n👉 Select an option:\n"
+                "   • Enter paper number (e.g. '1') to analyze & chat\n"
+                "   • Type 'compare X Y' (e.g. 'compare 1 2') to compare two papers\n"
+                "   • Press Enter to search again\n"
+                "Choice: "
+            ).strip()
+
+            if not user_choice:
                 continue
 
-            selected_paper = papers[int(choice) - 1]
-            paper_id = selected_paper.paper_id
-            print(f"\nSelected: '{selected_paper.title}'")
+            # MODE A: MULTI-PAPER COMPARISON ('compare X Y')
+            if user_choice.lower().startswith("compare"):
+                parts = user_choice.split()
+                if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+                    print("[Error] Please specify two valid numbers, e.g. 'compare 1 2'")
+                    continue
 
-            # 1. Download & Cache PDF
-            print("\n[Phase 1] Checking cache / downloading PDF...")
-            pdf_path = downloader.download_paper(paper_id=paper_id, pdf_url=selected_paper.pdf_url)
-            if not pdf_path:
-                continue
+                idx_a, idx_b = int(parts[1]) - 1, int(parts[2]) - 1
+                if not (0 <= idx_a < len(papers) and 0 <= idx_b < len(papers)) or idx_a == idx_b:
+                    print("[Error] Invalid paper indices selected for comparison.")
+                    continue
 
-            # 2. Parse Layout & Pages
-            print("\n[Phase 2] Parsing PDF pages...")
-            parsed_paper = parser.parse_pdf(pdf_path, paper_id=paper_id)
-            if not parsed_paper or parsed_paper.total_pages == 0:
-                continue
+                paper_a, paper_b = papers[idx_a], papers[idx_b]
 
-            # 3. Analyze Paper
-            print("\n[Phase 3] Generating deep analysis...")
-            analysis = analyzer.analyze_paper(parsed_paper)
-            if analysis:
-                display_analysis_dossier(analysis)
+                analysis_a = get_paper_analysis(paper_a, downloader, parser, analyzer)
+                analysis_b = get_paper_analysis(paper_b, downloader, parser, analyzer)
 
-            # 4. Chunk & Index for Grounded RAG
-            print("\n[Phase 4] Indexing paper into ChromaDB for Q&A...")
-            chunks = chunker.chunk_paper(parsed_paper)
-            vector_store.index_chunks(chunks)
+                if not analysis_a or not analysis_b:
+                    print("[Error] Could not extract analysis for both papers.")
+                    continue
 
-            # 5. Start Interactive Q&A Session
-            run_qa_session(qa_engine, paper_id=paper_id, paper_title=selected_paper.title)
+                comparison = comparator.compare_papers(
+                    paper_a_title=paper_a.title,
+                    analysis_a=analysis_a,
+                    paper_b_title=paper_b.title,
+                    analysis_b=analysis_b
+                )
+
+                if comparison:
+                    display_comparison_dossier(comparison)
+
+            # MODE B: SINGLE PAPER EXPLORATION & Q&A
+            elif user_choice.isdigit() and 1 <= int(user_choice) <= len(papers):
+                selected_paper = papers[int(user_choice) - 1]
+                paper_id = selected_paper.paper_id
+                print(f"\nSelected: '{selected_paper.title}'")
+
+                analysis = get_paper_analysis(selected_paper, downloader, parser, analyzer)
+                if analysis:
+                    display_analysis_dossier(analysis)
+
+                print("\n[Indexing] Ensuring paper is indexed in ChromaDB for Q&A...")
+                if not vector_store.is_paper_indexed(paper_id):
+                    pdf_path = downloader.get_local_path(paper_id)
+                    parsed_paper = parser.parse_pdf(pdf_path, paper_id=paper_id)
+                    if parsed_paper:
+                        chunks = chunker.chunk_paper(parsed_paper)
+                        vector_store.index_chunks(chunks)
+
+                run_qa_session(qa_engine, paper_id=paper_id, paper_title=selected_paper.title)
 
         except KeyboardInterrupt:
             print("\nSession interrupted. Goodbye!")

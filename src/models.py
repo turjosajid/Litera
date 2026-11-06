@@ -91,3 +91,34 @@ class PaperChunk(BaseModel):
     paper_id: str = Field(..., description="The ArXiv paper ID")
     page_number: int = Field(..., description="1-indexed page number where this chunk lives")
     text: str = Field(..., description="The actual text content of this chunk")
+
+class ComparisonPoint(BaseModel):
+    """A single dimension of comparison between two papers."""
+    aspect: str = Field(
+        ..., 
+        description="Dimension being compared (e.g. 'Core Architecture', 'Key Datasets', 'Computational Efficiency')"
+    )
+    paper_a_take: str = Field(..., description="How Paper A approaches this aspect")
+    paper_b_take: str = Field(..., description="How Paper B approaches this aspect")
+    winner_or_tradeoff: str = Field(
+        ..., 
+        description="Analysis of which approach performs better or the fundamental tradeoff between them"
+    )
+
+
+class PaperComparison(BaseModel):
+    """Full structured comparative analysis between two research papers."""
+    paper_a_title: str
+    paper_b_title: str
+    summary_of_differences: str = Field(
+        ..., 
+        description="High-level 2-3 sentence summary of how these two works diverge"
+    )
+    comparison_matrix: List[ComparisonPoint] = Field(
+        ..., 
+        description="List of specific criteria compared side-by-side"
+    )
+    verdict_and_recommendation: str = Field(
+        ..., 
+        description="Practical guidance on when to choose Paper A's methodology vs Paper B's methodology"
+    )
